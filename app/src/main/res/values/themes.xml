@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light or dark follows the system. WebView passes this on to pages as
+         prefers-color-scheme, so redlib's default "system" theme matches. -->
+    <style name="Base.AppTheme" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <style name="AppTheme" parent="Base.AppTheme">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">@bool/light_system_bars</item>
+    </style>
+</resources>

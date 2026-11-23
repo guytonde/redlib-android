@@ -1,0 +1,94 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      redlib_ref:
+        description: Build this redlib ref (tag, branch or commit) instead of the one in versions.env
+        type: string
+        default: ""
+
+permissions:
+  contents: write # attach APKs to releases on tag pushes
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      # Optional. Without these the APK is signed with a throwaway debug key.
+      KEYSTORE_BASE64: ${{ secrets.REDLIB_KEYSTORE_BASE64 }}
+      REDLIB_KEYSTORE_PASSWORD: ${{ secrets.REDLIB_KEYSTORE_PASSWORD }}
+      REDLIB_KEY_ALIAS: ${{ secrets.REDLIB_KEY_ALIAS }}
+      REDLIB_KEY_PASSWORD: ${{ secrets.REDLIB_KEY_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply redlib_ref override
+        if: inputs.redlib_ref != ''
+        env:
+          REF: ${{ inputs.redlib_ref }}
+        run: sed -i "s|^REDLIB_REF=.*|REDLIB_REF=$REF|" versions.env
+
+      - name: Read pinned versions
+        run: grep -E '^[A-Z_]+=' versions.env >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install NDK ${{ env.NDK_VERSION }}
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      # The source has to exist before rust-cache restores its target dir.
+      - name: Fetch redlib ${{ env.REDLIB_REF }}
+        run: bash scripts/build-redlib.sh --fetch-only
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: build/redlib-src -> target
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked --version '^4'
+
+      - name: Build redlib
+        run: bash scripts/build-redlib.sh
+
+      - name: Decode signing key
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "REDLIB_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease -Predlib.skip=true
+          ref="$REDLIB_REF"
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]] && ref="${ref:0:7}"
+          cp app/build/outputs/apk/release/app-release.apk "redlib-android-${ref//\//-}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: redlib-android
+          path: redlib-android-*.apk
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: redlib-android-*.apk

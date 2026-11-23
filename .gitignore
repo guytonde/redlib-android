@@ -1,0 +1,23 @@
+# Gradle, Kotlin and Android Studio
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Built by scripts/build-redlib.sh
+app/src/main/jniLibs/
+
+# Built APKs, copied here by assembleDebug and assembleRelease
+bin/
+*.apk
+*.aab
+
+# Signing keys
+*.jks
+*.keystore

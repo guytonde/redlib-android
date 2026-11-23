@@ -1,0 +1,108 @@
+name: Track redlib
+
+# Daily: if REDLIB_REPO has something newer than REDLIB_REF, build it, and only
+# when the build passes commit the bump to main and publish a release.
+#   REDLIB_REF is a commit hash -> follow the newest commit of the default branch
+#   REDLIB_REF is a tag         -> follow the repo's latest GitHub release
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      repo: ${{ steps.find.outputs.repo }}
+      current: ${{ steps.find.outputs.current }}
+      latest: ${{ steps.find.outputs.latest }}
+      mode: ${{ steps.find.outputs.mode }}
+      update: ${{ steps.find.outputs.update }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo="$(sed -n 's/^REDLIB_REPO=//p' versions.env)"
+          current="$(sed -n 's/^REDLIB_REF=//p' versions.env)"
+          if [[ "$current" =~ ^[0-9a-f]{40}$ ]]; then
+            mode=commit
+            latest="$(git ls-remote "$repo" HEAD | cut -f1)"
+            [ -n "$latest" ] || { echo "could not read HEAD of $repo" >&2; exit 1; }
+          else
+            mode=tag
+            # The latest release, not the highest tag name: upstream still has
+            # a stray v3.0.0 tag from 2021 that sorts above every real release.
+            slug="$(echo "${repo%.git}" | sed 's|^https://github.com/||')"
+            latest="$(gh api "repos/$slug/releases/latest" --jq .tag_name)"
+            [ -n "$latest" ] || { echo "no releases found in $repo" >&2; exit 1; }
+          fi
+          if [ "$current" != "$latest" ]; then update=true; else update=false; fi
+          {
+            echo "repo=$repo"
+            echo "current=$current"
+            echo "latest=$latest"
+            echo "mode=$mode"
+            echo "update=$update"
+          } >> "$GITHUB_OUTPUT"
+          echo "$repo: pinned $current, newest $latest ($mode)"
+
+  build:
+    needs: check
+    if: needs.check.outputs.update == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      redlib_ref: ${{ needs.check.outputs.latest }}
+    secrets: inherit
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ needs.check.outputs.repo }}
+      CURRENT: ${{ needs.check.outputs.current }}
+      LATEST: ${{ needs.check.outputs.latest }}
+      MODE: ${{ needs.check.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: redlib-android
+
+      - name: Describe the release
+        run: |
+          web="${REPO%.git}"
+          if [ "$MODE" = commit ]; then
+            label="${LATEST:0:7}"
+            notes="Built from $web/commit/$LATEST. Changes since the last build: $web/compare/${CURRENT:0:7}...${LATEST:0:7}"
+          else
+            label="$LATEST"
+            notes="Built from $web/releases/tag/$LATEST."
+          fi
+          echo "LABEL=$label" >> "$GITHUB_ENV"
+          echo "NOTES=$notes" >> "$GITHUB_ENV"
+
+      # Only reached when the build above succeeded, so main never points at
+      # a redlib version that fails to compile.
+      - name: Commit the version bump
+        run: |
+          sed -i "s|^REDLIB_REF=.*|REDLIB_REF=$LATEST|" versions.env
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Bump redlib to $LABEL"
+          git pull --rebase --quiet
+          git push
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "android-$LABEL" redlib-android-*.apk \
+            --title "Redlib $LABEL for Android" \
+            --notes "$NOTES"

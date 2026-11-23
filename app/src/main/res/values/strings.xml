@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Redlib</string>
+    <string name="starting">Starting redlib…</string>
+    <string name="loading">Loading…</string>
+    <string name="timeout">redlib did not start within 60 seconds.</string>
+    <string name="retry">Retry</string>
+    <string name="no_app_for_link">No app can open this link</string>
+</resources>
